@@ -1,0 +1,30 @@
+name: inference-shootout
+region: nyc
+services:
+  - name: web
+    github:
+      repo: oceanforge/inference-shootout
+      branch: main
+      deploy_on_push: true
+    environment_slug: python
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    # Stays at 1. RateLimiter and DailyBudget (guards.py) are in-memory and
+    # per-process — every extra instance gets its own independent budget, so
+    # scaling out multiplies the demo's real-money spend ceiling by
+    # instance_count instead of sharing one ceiling across instances. If this
+    # app is ever scaled beyond a single instance, the guards need to move to
+    # a shared store (e.g. Redis) first.
+    instance_count: 1
+    http_port: 8080
+    envs:
+      - key: DIGITAL_OCEAN_MODEL_ACCESS_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: RATE_LIMIT_PER_MINUTE
+        scope: RUN_TIME
+        value: "3"
+      - key: DAILY_BUDGET_USD
+        scope: RUN_TIME
+        value: "5.00"
+    health_check:
+      http_path: /
