@@ -4,11 +4,101 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>inference-shootout</title>
+  <link rel="icon" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header>
-    <h1>inference-shootout</h1>
-    <p>Frontend arrives in Task 6. Select up to {{ max_models }} models via /api/models.</p>
+    <h1>inference&#8209;shootout</h1>
+    <p>One prompt, several models, one DigitalOcean endpoint. Watch them race.</p>
   </header>
+
+  <form id="run">
+    <textarea id="prompt" rows="3" placeholder="Explain CORS to a junior dev" required></textarea>
+    <fieldset id="models"><legend>Models (max {{ max_models }})</legend></fieldset>
+    <button type="submit">Run</button>
+  </form>
+
+  <div id="columns"></div>
+  <table id="results" hidden>
+    <thead><tr><th>Model</th><th>TTFT</th><th>Total</th><th>Out tokens</th><th>Est. cost</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p id="pricing-note" class="note"></p>
+
+<script>
+let CATALOG = {};
+
+async function loadModels() {
+  CATALOG = await (await fetch('/api/models')).json();
+  const box = document.getElementById('models');
+  for (const id of CATALOG.models) {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox'; input.value = id;
+    input.checked = CATALOG.defaults.includes(id);
+    label.append(input, document.createTextNode(id));
+    box.append(label);
+  }
+  document.getElementById('pricing-note').textContent =
+    `Costs are estimates from a price table last verified ${CATALOG.prices_last_verified}.`;
+}
+
+function makeColumn(model) {
+  const col = document.createElement('section');
+  col.className = 'column';
+  col.innerHTML = `<h2>${model}</h2><pre></pre><footer>waiting…</footer>`;
+  document.getElementById('columns').append(col);
+  return { body: col.querySelector('pre'), foot: col.querySelector('footer') };
+}
+
+function race(prompt, models) {
+  document.getElementById('columns').innerHTML = '';
+  const tbody = document.querySelector('#results tbody');
+  tbody.innerHTML = '';
+  document.getElementById('results').hidden = false;
+
+  for (const model of models) {
+    const { body, foot } = makeColumn(model);
+    const url = `/stream?model=${encodeURIComponent(model)}&prompt=${encodeURIComponent(prompt)}`;
+    const es = new EventSource(url);
+
+    es.addEventListener('start', () => { foot.textContent = 'streaming…'; });
+    es.addEventListener('token', (e) => {
+      body.textContent += JSON.parse(e.data).text;
+      body.scrollTop = body.scrollHeight;
+    });
+    es.addEventListener('done', (e) => {
+      const d = JSON.parse(e.data);
+      foot.textContent = `${d.ttft_ms ?? '—'} ms to first token · ${d.total_ms} ms total`;
+      const cost = d.cost_usd == null ? '—' : `$${d.cost_usd.toFixed(6)}`;
+      tbody.insertAdjacentHTML('beforeend',
+        `<tr><td>${model}</td><td>${d.ttft_ms ?? '—'}</td><td>${d.total_ms}</td>` +
+        `<td>${d.output_tokens ?? '—'}</td><td>${cost}</td></tr>`);
+      es.close();
+    });
+    es.addEventListener('error', (e) => {
+      // A payload means the server refused deliberately; no payload means the
+      // connection dropped. Either way this column stops and the others carry on.
+      let message = 'connection lost';
+      try { message = JSON.parse(e.data).message; } catch (_) {}
+      foot.textContent = message;
+      col_error(body);
+      es.close();
+    });
+  }
+}
+
+function col_error(body) { body.closest('.column').classList.add('failed'); }
+
+document.getElementById('run').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const models = [...document.querySelectorAll('#models input:checked')].map(i => i.value);
+  if (!models.length) return;
+  race(document.getElementById('prompt').value, models.slice(0, CATALOG.max_models));
+});
+
+loadModels();
+</script>
 </body>
 </html>
