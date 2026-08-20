@@ -76,7 +76,7 @@ client pointed at a different `base_url`:
 ```python
 client = OpenAI(
     base_url="https://inference.do-ai.run/v1/",
-    api_key=os.environ["DIGITAL_OCEAN_MODEL_ACCESS_KEY"],
+    api_key=key,  # from DIGITAL_OCEAN_MODEL_ACCESS_KEY — see inference.py::make_client
 )
 ```
 
