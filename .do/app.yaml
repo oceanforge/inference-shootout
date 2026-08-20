@@ -20,6 +20,9 @@ services:
       - key: DIGITAL_OCEAN_MODEL_ACCESS_KEY
         scope: RUN_TIME
         type: SECRET
+      # Races per IP per minute, not requests: a race is one /stream request per
+      # selected model, so this is 3 x MAX_MODELS_PER_RUN (6) = 18 requests a
+      # minute. "0" disables the limiter.
       - key: RATE_LIMIT_PER_MINUTE
         scope: RUN_TIME
         value: "3"

@@ -111,13 +111,20 @@ import time.
 
 ## Hosted demo
 
-*Not live yet.* Once deployed, a link and its exact caps (requests per
+*Not live yet.* Once deployed, a link and its exact caps (races per
 minute, daily spend ceiling, max models per run, max output tokens) will
 be filled in here — see `NOTES.md` and `.env.example` for the guard
 defaults in the meantime. Everything the hosted instance enforces is a
 plain environment variable, so if the caps are too tight for what you want
 to try, fork it and run it on your own key — see **Deploy your own**
 above.
+
+`RATE_LIMIT_PER_MINUTE` is counted in **races per IP per minute, not
+requests**. One race opens one `/stream` request per selected model, so
+the default `RATE_LIMIT_PER_MINUTE=3` with `MAX_MODELS_PER_RUN=6` is an
+allowance of 18 requests a minute — three full six-model races. Setting it
+to `0` disables the limiter, which is usually what you want when you are
+running this on your own key.
 
 ## The write-up
 

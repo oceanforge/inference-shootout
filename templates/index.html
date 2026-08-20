@@ -28,6 +28,9 @@
 
 <script>
 let CATALOG = {};
+// Every EventSource the current race opened. Resubmitting closes these first:
+// an orphaned source keeps streaming (and billing) after its column is gone.
+let SOURCES = [];
 
 async function loadModels() {
   CATALOG = await (await fetch('/api/models')).json();
@@ -44,24 +47,47 @@ async function loadModels() {
     `Costs are estimates from a price table last verified ${CATALOG.prices_last_verified}.`;
 }
 
+// Built with DOM methods, not innerHTML: model ids come off the wire, and a
+// template this size gets copied — the copy should not carry an XSS with it.
 function makeColumn(model) {
   const col = document.createElement('section');
   col.className = 'column';
-  col.innerHTML = `<h2>${model}</h2><pre></pre><footer>waiting…</footer>`;
+  const head = document.createElement('h2');
+  head.textContent = model;
+  const body = document.createElement('pre');
+  const foot = document.createElement('footer');
+  foot.textContent = 'waiting…';
+  col.append(head, body, foot);
   document.getElementById('columns').append(col);
-  return { body: col.querySelector('pre'), foot: col.querySelector('footer') };
+  return { body, foot };
+}
+
+function resultRow(cells) {
+  const row = document.createElement('tr');
+  for (const value of cells) {
+    const cell = document.createElement('td');
+    cell.textContent = value;
+    row.append(cell);
+  }
+  return row;
 }
 
 function race(prompt, models) {
-  document.getElementById('columns').innerHTML = '';
+  // Close the previous race before opening the next one. Otherwise an impatient
+  // resubmit leaves N billed streams running behind the columns it replaced.
+  for (const old of SOURCES) old.close();
+  SOURCES = [];
+
+  document.getElementById('columns').replaceChildren();
   const tbody = document.querySelector('#results tbody');
-  tbody.innerHTML = '';
+  tbody.replaceChildren();
   document.getElementById('results').hidden = false;
 
   for (const model of models) {
     const { body, foot } = makeColumn(model);
     const url = `/stream?model=${encodeURIComponent(model)}&prompt=${encodeURIComponent(prompt)}`;
     const es = new EventSource(url);
+    SOURCES.push(es);
 
     es.addEventListener('start', () => { foot.textContent = 'streaming…'; });
     es.addEventListener('token', (e) => {
@@ -72,9 +98,7 @@ function race(prompt, models) {
       const d = JSON.parse(e.data);
       foot.textContent = `${d.ttft_ms ?? '—'} ms to first token · ${d.total_ms} ms total`;
       const cost = d.cost_usd == null ? '—' : `$${d.cost_usd.toFixed(6)}`;
-      tbody.insertAdjacentHTML('beforeend',
-        `<tr><td>${model}</td><td>${d.ttft_ms ?? '—'}</td><td>${d.total_ms}</td>` +
-        `<td>${d.output_tokens ?? '—'}</td><td>${cost}</td></tr>`);
+      tbody.append(resultRow([model, d.ttft_ms ?? '—', d.total_ms, d.output_tokens ?? '—', cost]));
       es.close();
     });
     es.addEventListener('error', (e) => {

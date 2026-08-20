@@ -140,6 +140,42 @@ def test_successful_run_charges_the_budget(price_table):
     assert budget.remaining() < 1.00
 
 
+def test_a_full_race_is_not_refused_by_the_default_rate_limit(price_table, monkeypatch):
+    """One race opens one /stream per model, so the shipped default must clear a
+    whole 6-model race. Limiting *requests* to 3 would refuse half of a
+    first-time visitor's very first click."""
+    monkeypatch.delenv("RATE_LIMIT_PER_MINUTE", raising=False)
+    models = [f"m{i}" for i in range(1, 7)]
+    usage = types.SimpleNamespace(prompt_tokens=10, completion_tokens=20)
+    app = create_app(
+        client=FakeClient(model_ids=models, stream_factory=lambda **kw: FakeStream(["hi"], usage)),
+        price_table=price_table,
+        limiter=None,  # built the way production builds it — that is the point
+        budget=DailyBudget(0, lambda: FIXED_DAY),
+        config={"MAX_MODELS_PER_RUN": 6, "MAX_OUTPUT_TOKENS": 512, "DEFAULT_MODELS": models},
+    )
+    app.config["TESTING"] = True
+    client = app.test_client()
+    for model in models:
+        events = sse_events(client.get(f"/stream?model={model}&prompt=hi", buffered=True))
+        assert events[-1][0] == "done", f"{model} was refused: {events[-1]}"
+
+
+def test_client_disconnect_mid_stream_still_charges_the_budget(price_table):
+    """Tokens generated before a disconnect are billed by the provider, so they
+    have to reach the ceiling too — otherwise a script that reads one chunk and
+    hangs up spends real money at zero recorded spend."""
+    budget = DailyBudget(limit_usd=1.00, clock=lambda: FIXED_DAY)
+    app, _ = build(price_table, texts=("a", "b", "c"), budget=budget)
+    response = app.test_client().get("/stream?model=m1&prompt=hi")  # unbuffered
+    chunks = response.response.__iter__()
+    next(chunks)  # start
+    next(chunks)  # first token — provider is now generating on our dime
+    assert budget.remaining() == 1.00
+    response.close()  # client goes away; the "done" event never runs
+    assert budget.remaining() < 1.00
+
+
 def test_max_output_tokens_is_enforced_server_side(price_table):
     app, client = build(price_table, config={"MAX_OUTPUT_TOKENS": 64})
     app.test_client().get("/stream?model=m1&prompt=hi&max_tokens=99999", buffered=True)

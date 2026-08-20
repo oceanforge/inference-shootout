@@ -7,6 +7,7 @@ import time
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from guards import DailyBudget, RateLimiter
 from inference import Catalog, make_client, stream_completion
@@ -43,13 +44,10 @@ def _utcnow() -> datetime.datetime:
 
 def create_app(client=None, price_table=None, limiter=None, budget=None, config=None):
     app = Flask(__name__)
-
-    client = client or make_client()
-    price_table = price_table or PriceTable.load("prices.json")
-    if limiter is None:
-        limiter = RateLimiter(int(os.environ.get("RATE_LIMIT_PER_MINUTE", 3)), time.monotonic)
-    if budget is None:
-        budget = DailyBudget(float(os.environ.get("DAILY_BUDGET_USD", 5.00)), _utcnow)
+    # App Platform terminates TLS at an L7 proxy, so request.remote_addr is the
+    # proxy's address: without this the "per-IP" rate limiter is one global
+    # bucket shared by every visitor. Werkzeug ships with Flask — no new dep.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1)
 
     settings = {
         "MAX_MODELS_PER_RUN": int(os.environ.get("MAX_MODELS_PER_RUN", 6)),
@@ -61,6 +59,20 @@ def create_app(client=None, price_table=None, limiter=None, budget=None, config=
         ],
     }
     settings.update(config or {})
+
+    client = client or make_client()
+    price_table = price_table or PriceTable.load("prices.json")
+    if limiter is None:
+        # RATE_LIMIT_PER_MINUTE is expressed in races, but the limiter counts
+        # streams: one race is N concurrent /stream requests, one per model. So
+        # the allowance handed to RateLimiter is races x models-per-race, or the
+        # first click of a 6-model race would refuse half its own columns.
+        # 0 stays 0 — disabled means disabled, not 0 x 6.
+        races = int(os.environ.get("RATE_LIMIT_PER_MINUTE", 3))
+        per_race = max(settings["MAX_MODELS_PER_RUN"], 1)
+        limiter = RateLimiter(races * per_race if races > 0 else races, time.monotonic)
+    if budget is None:
+        budget = DailyBudget(float(os.environ.get("DAILY_BUDGET_USD", 5.00)), _utcnow)
 
     catalog = Catalog(client)
 
@@ -97,16 +109,30 @@ def create_app(client=None, price_table=None, limiter=None, budget=None, config=
             max_tokens = min(int(requested), max_tokens)
 
         def generate():
-            yield _sse("start", {"model": model})
-            for event in stream_completion(client, model, prompt, max_tokens):
-                if event["event"] != "done":
-                    yield _sse(event["event"], event["data"])
-                    continue
-                data = dict(event["data"])
-                inp, out = data["input_tokens"], data["output_tokens"]
-                data["cost_usd"] = price_table.display_cost(model, inp, out)
-                budget.charge(price_table.budget_cost(model, inp, out))
-                yield _sse("done", data)
+            inp = out = None
+            deltas = 0
+            try:
+                yield _sse("start", {"model": model})
+                for event in stream_completion(client, model, prompt, max_tokens):
+                    if event["event"] != "done":
+                        if event["event"] == "token":
+                            deltas += 1
+                        yield _sse(event["event"], event["data"])
+                        continue
+                    data = dict(event["data"])
+                    inp, out = data["input_tokens"], data["output_tokens"]
+                    data["cost_usd"] = price_table.display_cost(model, inp, out)
+                    yield _sse("done", data)
+            finally:
+                # Charging here, not in the `done` branch, is what makes the
+                # ceiling real: a client that disconnects mid-stream raises
+                # GeneratorExit at a `token` yield, so `done` never runs — yet
+                # those tokens were generated and billed by the provider. The
+                # generator is closed exactly once, so this charges once. If the
+                # abort beat the usage chunk, bill the deltas we did stream.
+                cost = price_table.budget_cost(model, inp, out if out is not None else deltas)
+                if cost > 0:  # skips negatives and NaN, which are never a charge
+                    budget.charge(cost)
 
         return Response(
             generate(),
@@ -118,4 +144,6 @@ def create_app(client=None, price_table=None, limiter=None, budget=None, config=
 
 
 if __name__ == "__main__":
-    create_app().run(host="0.0.0.0", port=8080, threaded=True, debug=True)
+    # No debug=True: the Werkzeug debugger is a remote shell for anyone who can
+    # reach it. threaded=True stays — the SSE fan-out needs concurrent requests.
+    create_app().run(host="127.0.0.1", port=8080, threaded=True)

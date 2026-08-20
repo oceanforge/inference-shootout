@@ -7,7 +7,7 @@ running this on their own key disable both by setting their env vars to 0.
 """
 
 import threading
-from collections import defaultdict, deque
+from collections import deque
 
 
 class RateLimiter:
@@ -16,15 +16,30 @@ class RateLimiter:
     def __init__(self, per_minute: int, clock):
         self.per_minute = per_minute
         self._clock = clock
-        self._hits: dict[str, deque] = defaultdict(deque)
+        self._hits: dict[str, deque] = {}
+        self._swept = 0.0
         self._lock = threading.Lock()
+
+    def _sweep_locked(self, now: float) -> None:
+        """Forget callers whose window has emptied.
+
+        Without this, `_hits` keeps one entry per IP that ever touched a public
+        endpoint, forever. Swept at most once a minute so a busy instance does
+        not pay for the walk on every request.
+        """
+        if now - self._swept < 60:
+            return
+        self._swept = now
+        for key in [k for k, hits in self._hits.items() if not hits or now - hits[-1] >= 60]:
+            del self._hits[key]
 
     def allow(self, key: str) -> bool:
         if self.per_minute <= 0:
             return True
         now = self._clock()
         with self._lock:
-            hits = self._hits[key]
+            self._sweep_locked(now)
+            hits = self._hits.setdefault(key, deque())
             while hits and now - hits[0] >= 60:
                 hits.popleft()
             if len(hits) >= self.per_minute:
