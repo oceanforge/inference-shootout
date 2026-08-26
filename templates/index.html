@@ -96,6 +96,16 @@ function race(prompt, models) {
     });
     es.addEventListener('done', (e) => {
       const d = JSON.parse(e.data);
+      // A reasoning model can spend its whole token budget thinking and emit no
+      // answer at all. Without this the column just sits there empty and the app
+      // looks broken, when in fact the model ran, billed, and said nothing.
+      if (!body.textContent && d.reasoning_tokens) {
+        body.textContent =
+          `(no answer: this model spent ${d.reasoning_tokens} of its ` +
+          `${d.output_tokens} tokens on internal reasoning and ran out of budget ` +
+          `before writing a reply. Raise MAX_OUTPUT_TOKENS to see output.)`;
+        body.closest('.column').classList.add('reasoned-out');
+      }
       foot.textContent = `${d.ttft_ms ?? '—'} ms to first token · ${d.total_ms} ms total`;
       const cost = d.cost_usd == null ? '—' : `$${d.cost_usd.toFixed(6)}`;
       tbody.append(resultRow([model, d.ttft_ms ?? '—', d.total_ms, d.output_tokens ?? '—', cost]));

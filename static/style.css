@@ -142,3 +142,10 @@ table#results td {
   .column { flex-basis: 220px; }
   .column pre { height: 200px; }
 }
+
+/* A reasoning model that used its whole budget thinking and produced no answer.
+   Visually distinct from a failure — it worked, it just said nothing. */
+.column.reasoned-out pre {
+  font-style: italic;
+  opacity: 0.75;
+}

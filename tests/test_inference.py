@@ -83,3 +83,26 @@ def test_max_tokens_is_passed_through():
     list(stream_completion(client, "m", "hi", 128, clock=FakeClock()))
     assert client.calls[0]["max_tokens"] == 128
     assert client.calls[0]["stream"] is True
+
+
+def test_reasoning_tokens_are_surfaced_when_a_model_thinks_but_never_answers():
+    """A reasoning model can burn its whole budget in `reasoning_content` — a
+    field outside the OpenAI schema — and emit zero `content`. Observed live:
+    qwen3.5-397b-a17b spent 487 of 512 tokens reasoning and rendered an empty
+    column. The count must reach the client so the column can explain itself."""
+    details = types.SimpleNamespace(reasoning_tokens=487)
+    usage = types.SimpleNamespace(prompt_tokens=25, completion_tokens=512,
+                                  completion_tokens_details=details)
+    client = FakeClient(stream_factory=lambda **kw: FakeStream([], usage))
+    done = list(stream_completion(client, "m", "hi", 512, clock=FakeClock()))[-1]
+    assert done["event"] == "done"
+    assert done["data"]["ttft_ms"] is None       # no content ever arrived
+    assert done["data"]["output_tokens"] == 512  # but it billed in full
+    assert done["data"]["reasoning_tokens"] == 487
+
+
+def test_reasoning_tokens_is_none_for_ordinary_models():
+    usage = types.SimpleNamespace(prompt_tokens=1, completion_tokens=2)
+    client = FakeClient(stream_factory=lambda **kw: FakeStream(["hi"], usage))
+    done = list(stream_completion(client, "m", "hi", 512, clock=FakeClock()))[-1]
+    assert done["data"]["reasoning_tokens"] is None

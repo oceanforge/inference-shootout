@@ -81,5 +81,20 @@ def stream_completion(client, model, prompt, max_tokens, clock=time.monotonic):
             "total_ms": round((clock() - started) * 1000),
             "input_tokens": getattr(usage, "prompt_tokens", None),
             "output_tokens": getattr(usage, "completion_tokens", None),
+            "reasoning_tokens": _reasoning_tokens(usage),
         },
     }
+
+
+def _reasoning_tokens(usage):
+    """Tokens a reasoning model spent thinking rather than answering.
+
+    Reasoning models stream their thinking in `delta.reasoning_content`, which
+    is not part of the OpenAI schema, so a client reading `delta.content` sees
+    nothing at all. With a low max_tokens the model can spend its entire budget
+    reasoning and return zero visible output while still billing in full. The
+    count is surfaced so an empty column can explain itself instead of just
+    looking broken.
+    """
+    details = getattr(usage, "completion_tokens_details", None)
+    return getattr(details, "reasoning_tokens", None) if details else None
