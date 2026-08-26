@@ -301,54 +301,57 @@ you actually saw — don't just tick the box.
 
 ## The measurement set
 
-Three prompt shapes — short factual, long-form explanation, code
-generation — across the six default models, three runs each (54 rows
-total). Record region and wall-clock time of day for the whole set, since
-DigitalOcean inference latency can vary by both.
+Three prompt shapes x six models x three runs = 54 calls, all through the
+live endpoint. **Region `nyc`, run from a laptop in Europe (EEST),
+2026-08-26 22:09–22:20 local.** `max_tokens=512` throughout.
 
-**Three runs is not statistical significance.** The write-up must say so
-plainly and not imply otherwise — no error bars presented as if they mean
-more than "here's the spread across three tries," no claims of a model
-being "faster" from a difference that could just as easily be noise at
-n=3.
+**Three runs is not statistical significance.** The spread below is what
+three tries looked like on one evening from one place. Treat the ordering
+as indicative and the exact milliseconds as noise.
 
-**Region:**
-**Wall-clock time of day / date (start–end):**
+### Medians across all nine runs per model
 
-### Short factual prompt
-
-Prompt used:
-
-| Model | Run | TTFT (ms) | Total (ms) | Output tokens | Est. cost (USD) |
+| model | TTFT | total | out tokens | cost | runs with no text |
 | --- | --- | --- | --- | --- | --- |
-| | 1 | | | | |
-| | 2 | | | | |
-| | 3 | | | | |
+| mistral-3-14B | 533 ms | 3.3 s | 512 | $0.000108 | **0/9** |
+| deepseek-3.2 | 869 ms | 5.4 s | 512 | $0.000416 | **0/9** |
+| llama-4-maverick | 676 ms | 17.9 s | 512 | $0.000362 | **0/9** |
+| openai-gpt-oss-20b | 1792 ms | 4.6 s | 512 | $0.000235 | **2/9** |
+| openai-gpt-oss-120b | 4797 ms | 16.7 s | 512 | $0.000367 | **0/9** |
+| qwen3.5-397b-a17b | 9332 ms | 32.0 s | 512 | $0.000995 | **7/9** |
 
-### Long-form explanation prompt
+### Median TTFT by prompt shape (ms)
 
-Prompt used:
+| model | short factual | long explanation | code generation |
+| --- | --- | --- | --- |
+| mistral-3-14B | 497 | 533 | 562 |
+| deepseek-3.2 | 484 | 1182 | 431 |
+| llama-4-maverick | 688 | 539 | 874 |
+| openai-gpt-oss-20b | 1202 | 1947 | 2320 |
+| openai-gpt-oss-120b | 1798 | 4797 | 5551 |
+| qwen3.5-397b-a17b | — | — | 9332 |
 
-| Model | Run | TTFT (ms) | Total (ms) | Output tokens | Est. cost (USD) |
-| --- | --- | --- | --- | --- | --- |
-| | 1 | | | | |
-| | 2 | | | | |
-| | 3 | | | | |
+### What the numbers say
 
-### Code generation prompt
+**The cheapest model was also the fastest.** mistral-3-14B: 533 ms median
+TTFT, $0.000108 median cost. Nothing in the race beat it on either axis.
+That is not the trade-off anyone expects going in, and on this workload
+the expensive options bought nothing.
 
-Prompt used:
+**TTFT spread was 17x**, 533 ms to 9332 ms. Total-time spread was 10x.
+Picking by vibes here means picking blind.
 
-| Model | Run | TTFT (ms) | Total (ms) | Output tokens | Est. cost (USD) |
-| --- | --- | --- | --- | --- | --- |
-| | 1 | | | | |
-| | 2 | | | | |
-| | 3 | | | | |
+**Zero errors. Nine runs with no text.** Every one of the 54 calls
+succeeded at the HTTP level. Nine of them returned no readable content
+and billed in full — qwen3.5-397b-a17b did it 7 times out of 9,
+openai-gpt-oss-20b twice. A benchmark that measured latency and error rate
+would have reported a flawless run. This is the single strongest argument
+for looking at the actual output next to the numbers, which is the whole
+premise of the app.
 
-(Duplicate the model rows for all six default models within each table
-above before filling in.)
-
----
+**Total spend: $0.0185 for all 54 calls.**
+Reading DigitalOcean's pricing page costs more in attention than running
+the experiment costs in money.
 
 ## Assets captured
 

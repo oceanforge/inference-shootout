@@ -16,9 +16,11 @@ this app exists to answer:
 
 ## Screenshot
 
-`docs/screenshot.png` and `docs/race.gif` are coming — captured from a real
-run once the app is deployed and measured (see `NOTES.md`). Placeholder for
-now; check back or watch the repo.
+![Six models racing one prompt, with the results table below](docs/screenshot.png)
+
+`docs/race.gif` shows the same run in motion — six columns filling at
+visibly different speeds. Both were captured from a real deployment on
+2026-08-26; the numbers in them are real.
 
 ## Run it locally
 
@@ -109,15 +111,18 @@ model-access-key-vs-API-token distinction above, instead of gunicorn's
 opaque "Failed to find application object" when it can't build one at
 import time.
 
-## Hosted demo
+## Is there a hosted demo?
 
-*Not live yet.* Once deployed, a link and its exact caps (races per
-minute, daily spend ceiling, max models per run, max output tokens) will
-be filled in here — see `NOTES.md` and `.env.example` for the guard
-defaults in the meantime. Everything the hosted instance enforces is a
-plain environment variable, so if the caps are too tight for what you want
-to try, fork it and run it on your own key — see **Deploy your own**
-above.
+No, deliberately. One ran long enough to take the measurements in
+`NOTES.md` and capture the screenshot, then it was torn down.
+
+A shared demo answers the wrong question. It tells you how six models
+handled *someone else's* prompt on *someone else's* account tier. The
+question worth answering is which model suits **your** task at **your**
+prices, and that needs your key and your prompt. It takes about two
+minutes — see **Run it locally** above.
+
+The spend guards below exist for anyone who does host it publicly.
 
 `RATE_LIMIT_PER_MINUTE` is counted in **races per IP per minute, not
 requests**. One race opens one `/stream` request per selected model, so
@@ -128,10 +133,13 @@ running this on your own key.
 
 ## The write-up
 
-`docs/blog-post.md` is coming — the full story of building this, what the
-concurrency measurements actually showed, and what fell out of a real
-deploy. Not written yet; this app's own numbers don't exist until it's
-been run for real (see `NOTES.md`).
+[`docs/blog-post.md`](docs/blog-post.md) is the full story: what the
+measurements showed, why the concurrency prediction was wrong, and the
+three things that caught me out. `NOTES.md` is the raw build log it was
+written from, and `docs/measurements.json` has all 54 runs.
+
+Short version: the cheapest model was also the fastest, and nine of the 54
+calls returned no text at all while billing in full.
 
 ## License and disclosure
 

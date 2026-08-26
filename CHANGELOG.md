@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-08-26
+
+First run against the live endpoint. Everything here came from things that
+only showed up once real traffic hit it.
+
+### Added
+
+- `reasoning_tokens` in the `done` event. Reasoning models stream their
+  thinking in `delta.reasoning_content`, outside the OpenAI schema, so a
+  client reading `delta.content` sees nothing; with a low `max_tokens`
+  they can spend the whole budget thinking and return no answer while
+  billing in full. Observed: qwen3.5-397b-a17b used 487 of 512 tokens
+  reasoning in 7 of 9 runs. Such a column now explains itself rather than
+  appearing broken.
+- `docs/blog-post.md`, `docs/community-answer.md`, `docs/measurements.json`
+  (all 54 measured runs), `docs/screenshot.png`, `docs/race.gif`.
+
+### Fixed
+
+- `DEFAULT_MODELS` contained `anthropic-claude-haiku-4.5`, which returns
+  403 "not available for your subscription tier" on a standard account.
+  The live catalog lists 72 models; 6 were callable. Nothing in the
+  `/v1/models` response marks the difference. Replaced with
+  `qwen3.5-397b-a17b`.
+
+### Changed
+
+- README no longer offers a hosted demo. One ran long enough to take the
+  measurements, then was torn down — a shared demo answers someone else's
+  question on someone else's account tier.
+
 ## [0.1.0] - 2026-08-20
 
 ### Added
