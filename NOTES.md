@@ -2,20 +2,20 @@
 
 **No measurements have been taken yet.** Everything below is a template —
 headings and the exact commands to run — waiting to be filled in against a
-real deployment with a real `DIGITAL_OCEAN_MODEL_ACCESS_KEY`. Task 7
-(deployment config and docs) could not run any of this: it had neither a
-model access key nor a DigitalOcean account available. Nothing in this file
-should be read as a result until someone has actually run the commands and
-replaced the blanks.
+real deployment with a real `DIGITAL_OCEAN_MODEL_ACCESS_KEY`. The
+deployment config and docs were written without a key or a DigitalOcean
+account to hand, so none of it has been exercised. Nothing here should be
+read as a result until someone has actually run the commands and replaced
+the blanks.
 
-Per the design spec (`docs/superpowers/specs/2026-08-20-inference-shootout-design.md`,
-section 11): log friction the moment it happens, with a timestamp. This is
-the raw material for the write-up's verdict section and can't be
-reconstructed after the fact.
+Log friction the moment it happens, with a timestamp. This is the raw
+material for the write-up's verdict section, and it can't be reconstructed
+after the fact — two days later the irritation is gone and so is the
+specific detail that made it worth writing down.
 
 ---
 
-## Concurrency verification (design spec section 4 / task 8, step "verify the concurrency claim")
+## Concurrency verification
 
 The claim under test: the default gunicorn sync worker holds one connection
 per worker, so N concurrent SSE streams will starve the pool and the page
@@ -38,8 +38,8 @@ for i in 1 2 3 4 5 6; do
 done; wait
 ```
 
-> Caveat for whoever runs this: as of task 7, `app.py` has no module-level
-> `app` object (see the Procfile / controller ruling R3 note below), so
+> Caveat for whoever runs this: `app.py` has no module-level
+> `app` object (see the Procfile note below), so
 > `app:app` will not resolve at all — gunicorn will fail to boot with
 > "Failed to find application object 'app' in 'app'" before any of the
 > curls even run. To reproduce the *actual* naive-sync-worker stall, swap
@@ -81,13 +81,13 @@ done; wait
 ### Verdict
 
 (Fill in once both halves have been run: does the threaded-worker fix hold
-up as claimed? If the naive config didn't actually stall the way the spec
-assumed, say that here — the write-up's section 3 gets built from whatever
-this file actually says, not from the spec's prediction.)
+up as claimed? If the naive config didn't actually stall the way it was
+expected to, say that here — the write-up gets built from whatever this
+file actually says, not from what was predicted.)
 
 ---
 
-## Deploy to App Platform (task 8, step 1)
+## Deploy to App Platform
 
 Log anything that cost more than five minutes: confusing docs, unclear
 error messages, build failures, env var gotchas, health check behavior,
@@ -124,7 +124,7 @@ first deploy, etc.):**
 
 ---
 
-## Billing alert (task 8, step 2)
+## Billing alert
 
 **Why this matters, explicitly:** `guards.py`'s `RateLimiter` and
 `DailyBudget` are deliberately in-memory — no Redis, no database, per the
@@ -150,7 +150,7 @@ under Browser checks below) can run up cost quietly.
 
 ---
 
-## Browser checks (task 8, step 3 — flagged in code review, need a live app)
+## Browser checks (need a running app)
 
 These came out of reading the code, not out of running it, so none of them
 are confirmed. Check each against the real deployed app and record what
@@ -202,7 +202,7 @@ you actually saw — don't just tick the box.
 
 ---
 
-## The measurement set (task 8, step 3)
+## The measurement set
 
 Three prompt shapes — short factual, long-form explanation, code
 generation — across the six default models, three runs each (54 rows
@@ -253,7 +253,7 @@ above before filling in.)
 
 ---
 
-## Assets captured (task 8, step 4)
+## Assets captured
 
 - [ ] `docs/screenshot.png` — the settled results table (after a race has
   finished, not mid-stream).
@@ -267,7 +267,7 @@ Neither file should exist in the repo until it's a capture of a real run.
 
 ---
 
-## Then and only then: the writing (task 8, step 5 onward)
+## Then and only then: the writing
 
 `docs/blog-post.md` and `docs/community-answer.md` get written **from
 this file's contents**, once the sections above are actually filled in —
