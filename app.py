@@ -20,7 +20,7 @@ DEFAULT_MODELS = [
     "openai-gpt-oss-20b",
     "llama-4-maverick",
     "deepseek-3.2",
-    "anthropic-claude-haiku-4.5",
+    "qwen3.5-397b-a17b",
     "mistral-3-14B",
 ]
 
