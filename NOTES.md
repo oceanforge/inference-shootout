@@ -1,12 +1,9 @@
 # NOTES
 
-**No measurements have been taken yet.** Everything below is a template —
-headings and the exact commands to run — waiting to be filled in against a
-real deployment with a real `DIGITAL_OCEAN_MODEL_ACCESS_KEY`. The
-deployment config and docs were written without a key or a DigitalOcean
-account to hand, so none of it has been exercised. Nothing here should be
-read as a result until someone has actually run the commands and replaced
-the blanks.
+**First real run: 2026-08-26, ~21:00–22:15 EEST**, from a laptop in
+Europe against the `nyc` region, on a standard DigitalOcean account.
+Everything below marked *Observed* actually happened. Anything still
+blank has not been run yet.
 
 Log friction the moment it happens, with a timestamp. This is the raw
 material for the write-up's verdict section, and it can't be reconstructed
@@ -14,6 +11,71 @@ after the fact — two days later the irritation is gone and so is the
 specific detail that made it worth writing down.
 
 ---
+
+## The catalog lies about what you can call
+
+Biggest surprise of the build, found before any measurement was taken.
+
+`GET /v1/models` returns **72 models**. On a standard account, calling most
+of them returns:
+
+```
+403 - {'error': {'message': 'this model is not available for your
+subscription tier', 'type': 'forbidden_error'}}
+```
+
+Of the 11 models priced in `prices.json`, these were callable on
+2026-08-26:
+
+| model | callable |
+| --- | --- |
+| openai-gpt-oss-120b | yes |
+| openai-gpt-oss-20b | yes |
+| llama-4-maverick | yes |
+| deepseek-3.2 | yes |
+| qwen3.5-397b-a17b | yes |
+| mistral-3-14B | yes |
+| anthropic-claude-haiku-4.5 | **403 tier-locked** |
+| anthropic-claude-5-sonnet | **403 tier-locked** |
+| anthropic-claude-opus-5 | **403 tier-locked** |
+| openai-gpt-4o | **403 tier-locked** |
+| openai-o3 | **403 tier-locked** |
+
+The pattern: open-weight models work, proprietary ones (Anthropic, OpenAI's
+non-`gpt-oss` line) do not.
+
+Two things make this worth writing about:
+
+1. **Nothing in the `/v1/models` response distinguishes them.** There is no
+   `available`, no `tier`, no flag. The only way to discover a model is
+   off-limits is to call it and read the 403. A picker built from the
+   catalog — which is exactly what this app does, and exactly what the docs
+   suggest — will confidently offer you 72 models and fail on most.
+2. **It broke this repo's own defaults.** `anthropic-claude-haiku-4.5`
+   shipped in `DEFAULT_MODELS` because it was in the published catalog and
+   the pricing page. It 403s. Fixed by swapping in `qwen3.5-397b-a17b`.
+
+It also accidentally validated the per-column error isolation: one dead
+model shows its own 403 and the other five keep streaming. That design
+choice was made for hypothetical failures; this is the real one.
+
+## A DigitalOcean API token works on the inference endpoint
+
+The README (and DigitalOcean's own docs) tell you to create a *model access
+key* under the Gradient AI Platform, distinct from an API token under
+Settings → API. Tested on 2026-08-26: a `dop_v1_...` personal access token
+authenticates against **both** `inference.do-ai.run/v1/models` and
+`api.digitalocean.com/v2/account`.
+
+So the distinction is real as an object — they are made in different places
+and a model access key is properly scoped — but it is not enforced in the
+direction people assume. If someone tells you their API token "shouldn't
+work" for inference, it does. Worth a sentence in the post, mostly because
+the failure people actually hit is the reverse: pasting a model access key
+where a full API token is required.
+
+Use the narrow credential anyway. A model access key that leaks costs you
+inference spend; an API token that leaks costs you the account.
 
 ## Concurrency verification
 
@@ -47,15 +109,33 @@ done; wait
 > `gunicorn --workers 1 --bind 0.0.0.0:8080 'app:create_app()'`. Note this
 > down if that's what you had to do.
 
-**Observed (fill in):**
--
--
--
+**Observed (2026-08-26):** the `app:app` caveat above is real — gunicorn
+refuses to boot. Using `'app:create_app()'`, six concurrent streams against
+`--workers 1`:
 
-**Did it stall?**
-- [ ] Yes — describe how it presented (hung curls? connection refused?
-      timeout? which request(s)?) and how long it took to recover:
-- [ ] No — describe what actually happened instead:
+| model | first token | total | events |
+| --- | --- | --- | --- |
+| mistral-3-14B | 1250 ms | 1.53 s | 56 |
+| openai-gpt-oss-120b | 5326 ms | 6.12 s | 26 |
+| openai-gpt-oss-20b | 7278 ms | 7.58 s | 33 |
+| deepseek-3.2 | 8347 ms | 8.68 s | 20 |
+| llama-4-maverick | 9147 ms | 10.69 s | 39 |
+
+Wall clock 10.69 s. The signature is the *even stagger*: first-token times
+land at roughly 1.2 s, 5.3 s, 7.3 s, 8.3 s, 9.1 s — each stream's first
+token arrives only after the previous one has finished. That is
+serialization, not slow models.
+
+It does not present as a hang, which is worth saying because the prediction
+was that it would. Every request eventually succeeds. What you actually see
+in a browser is columns lighting up one at a time, left to right, which
+reads as "the models are slow" rather than "my server is misconfigured" —
+arguably a worse failure mode than an outright stall, because nothing looks
+broken.
+
+**Did it stall?** No — and that matters. It serialized. Every request
+returned a complete, correct response; they just refused to overlap. No
+timeouts, no connection refused, nothing to recover from.
 
 ### B. Procfile config — threaded workers
 
@@ -69,21 +149,38 @@ for i in 1 2 3 4 5 6; do
 done; wait
 ```
 
-**Observed (fill in):**
--
--
--
+**Observed (2026-08-26):** same six models, same prompt, threaded workers:
 
-**Did all six streams complete without stalling?**
-- [ ] Yes
-- [ ] No — describe what happened:
+| model | first token | total | events |
+| --- | --- | --- | --- |
+| mistral-3-14B | 1005 ms | 1.27 s | 54 |
+| llama-4-maverick | 1084 ms | 2.51 s | 39 |
+| openai-gpt-oss-20b | 1566 ms | 1.93 s | 39 |
+| deepseek-3.2 | 2367 ms | 2.93 s | 20 |
+| openai-gpt-oss-120b | 5164 ms | 6.42 s | 39 |
 
-### Verdict
+Wall clock 6.42 s, down from 10.69 s. Four of five first tokens land inside
+a 1.4-second window instead of marching across a ten-second one. The
+remaining outlier, gpt-oss-120b at 5.2 s, is slow in isolation too — that
+one is the model, not the server.
 
-(Fill in once both halves have been run: does the threaded-worker fix hold
-up as claimed? If the naive config didn't actually stall the way it was
-expected to, say that here — the write-up gets built from whatever this
-file actually says, not from what was predicted.)
+**Did all six streams complete without stalling?** Yes.
+
+### Verdict — the honest version
+
+The threaded worker is necessary and the fix is real: 10.69 s to 6.42 s,
+and the first-token stagger collapses from ~8 s of spread to ~1.4 s.
+
+But the predicted symptom was wrong. The sync worker does not hang, does
+not time out, and does not error. It quietly serializes, and the page still
+works. Anyone shipping this without `--worker-class gthread` would most
+likely conclude the models were slow and never suspect their own gunicorn
+config — which is a more interesting thing to write about than a stall,
+because a stall is obvious and this isn't.
+
+Sample size: one run of each config, one region, one time of day. Enough to
+show the direction, not enough to quote a speedup ratio as if it were
+stable.
 
 ---
 
