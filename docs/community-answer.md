@@ -1,26 +1,28 @@
-# Why concurrent streaming responses appear to hang on App Platform
+# Concurrent streaming responses queue up on App Platform instead of overlapping
 
-**Problem:** you have a Python app on DigitalOcean App Platform that
-streams responses — SSE, chunked responses, an LLM proxy, anything
-long-lived. It works fine when you test it alone. As soon as the page
-opens several streams at once, they stop overlapping: the first finishes,
-then the second starts, then the third. With six concurrent streams the
-last one starts nine seconds in.
+**Problem:** you have a Python app on App Platform that streams responses.
+Server-Sent Events, chunked responses, an LLM proxy, anything long-lived.
+Alone it's fine. Open several at once from the same page and they stop
+overlapping. First one finishes, then the second starts, then the third.
+With six concurrent streams the last one doesn't produce a byte for nine
+seconds.
 
-Nothing errors. That's what makes it hard to spot.
+Nothing errors. That's the part that makes this hard to spot, and it's why
+I spent an hour blaming the upstream API before I looked at my own server.
 
-## Cause
+## What's happening
 
-gunicorn's default worker (`sync`) handles **one connection per worker
-process** and holds it until the response completes. That's fine for
-ordinary requests measured in milliseconds. A streaming response is held
-open for its entire lifetime — seconds, sometimes minutes — so each open
-stream occupies a whole worker for its full duration.
+gunicorn's default worker is `sync`. A sync worker takes one connection
+per process and holds it until the response is finished, which for normal
+requests lasting 40 milliseconds is completely fine and something you will
+never once think about, but a streaming response stays open for its entire
+life, maybe ten seconds, maybe a minute, and for all of that time it is
+sitting on a whole worker while everything else queues up behind it
+waiting for a turn.
 
-Concurrent streams therefore queue. They don't fail, they don't time out,
-they just wait their turn.
+They don't fail. They queue.
 
-## Reproducing it
+## Confirming it
 
 Naive config, six concurrent streams:
 
@@ -31,7 +33,7 @@ for i in 1 2 3 4 5 6; do
 done; wait
 ```
 
-Measured on a real app, time-to-first-byte per stream:
+Time to first byte per stream, measured on a real app:
 
 ```
 stream 1   1250 ms
@@ -41,19 +43,21 @@ stream 4   8347 ms
 stream 5   9147 ms
 ```
 
-The signature is the **even stagger** — each stream's first byte arrives
-about when the previous one finished. If your timings look like that, it's
-serialization, not slow upstreams.
+The tell is the even spacing. Each stream's first byte lands right about
+when the one before it finished, which is not what slow upstreams look
+like at all, because slow upstreams give you a cluster of roughly similar
+times rather than a staircase where every step is exactly one response
+tall. If you see the staircase, it's a queue.
 
 ## Fix
 
-Use threaded workers:
+Threaded workers:
 
 ```
 web: gunicorn --worker-class gthread --threads 16 --timeout 120 --bind 0.0.0.0:8080 'myapp:create_app()'
 ```
 
-Same load, same app:
+Same app, same load:
 
 ```
 stream 1   1005 ms
@@ -62,38 +66,42 @@ stream 3   1566 ms
 stream 4   2367 ms
 ```
 
-Four of the first bytes now land inside a 1.4-second window instead of
-across a ten-second one, and wall clock drops from 10.7 s to 6.4 s.
+Four first bytes inside a 1.4 second window rather than strung out across
+ten, and total wall clock drops from 10.7 s to 6.4 s.
 
-Pick `--threads` to cover your expected concurrent streams with headroom.
-Streaming threads are mostly blocked on I/O, so they're cheap; 16 is a
-reasonable starting point for a small instance. Raise `--timeout` above
-your longest expected stream, or gunicorn will kill workers mid-response.
+Set `--threads` to cover the concurrent streams you expect, plus room.
+They're cheap. Streaming threads spend nearly all their time blocked on
+I/O, so 16 is a sane starting number even on a small instance. Push
+`--timeout` past your longest expected stream while you're there, because
+otherwise gunicorn kills the worker halfway through a response and you've
+swapped one confusing bug for another one.
 
-`gevent` or `uvicorn` with an async framework also solve it. `gthread` is
-the smallest change if your app is synchronous Flask or Django.
+`gevent` works, and so does `uvicorn` if your app is async. `gthread` is
+just the smallest diff if you're on synchronous Flask or Django.
 
-## Why you probably won't catch this locally
+## Why local testing misses it
 
-`flask run` and `app.run()` in debug mode are threaded by default, so
-concurrent streams overlap correctly on your laptop and serialize only in
-production. Test streaming concurrency against the same gunicorn command
-your `Procfile` uses, not the dev server.
+`flask run` and `app.run()` are threaded by default. Which means your
+streams overlap perfectly on your laptop, behave themselves through code
+review, and then serialize the moment they're behind gunicorn in
+production, which is roughly the worst available place to learn this. Test
+concurrency against the same command your `Procfile` uses. Not the dev
+server.
 
-## One App Platform detail
+## Two App Platform specifics
 
-App Platform's buildpack will start your app for you if you don't specify,
-and the default won't be tuned for streaming. Commit an explicit
-`Procfile` so the worker class is yours to control rather than inherited.
+If you don't give it a `Procfile`, the Python buildpack will pick a start
+command for you, and it won't be tuned for streaming. Commit one so the
+worker class is a decision you made.
 
-Also: if you use an app factory, the target is `'myapp:create_app()'` with
-the parentheses, not `myapp:app`. A missing module-level `app` object
-fails with `Failed to find application object`, which reads like a
-different problem entirely.
+Also, if you use an application factory, the target needs the parentheses:
+`'myapp:create_app()'`, not `myapp:app`. Get that wrong and you get
+`Failed to find application object`, which sounds like a completely
+different problem and will send you off debugging your imports.
 
 ---
 
-Measured while building a small open-source app that streams several LLM
-responses side by side; numbers above are from a real run on App Platform
-in `nyc`. Code, if useful:
+Numbers above are from a real App Platform deploy in `nyc`, measured while
+building a small open-source app that streams several LLM responses side
+by side. Code, if it's useful:
 [github.com/oceanforge/inference-shootout](https://github.com/oceanforge/inference-shootout)
