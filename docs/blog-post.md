@@ -5,24 +5,25 @@ tags: showdev, ai, python, digitalocean
 canonical_url:
 ---
 
-I keep having the same argument with myself. Some endpoint needs a model
-behind it, and I have to pick one. And the honest basis for that decision
-is usually: a benchmark someone else ran, on a prompt that isn't mine, six
-months ago.
+Every time I put a model behind an endpoint I make the same lazy decision.
+I pick whatever I used last time, or whatever I read about most recently,
+and I tell myself I'll benchmark it properly later, and later never
+arrives because there is always something with an actual deadline on it
+and comparing model latencies feels like procrastination even when it
+isn't. I never do it. Not once.
 
-So I spent a weekend building the thing that answers it properly. One
-prompt, fired at several models at once, streaming side by side, with time
-to first token and cost per run underneath each column.
+So I built the thing that would make me do it. One prompt, fired at six
+models at once, streaming side by side in columns, with time to first
+token and cost per run underneath each one. About 390 lines of Python.
+[Code's here](https://github.com/oceanforge/inference-shootout), MIT, take
+it.
 
-It's about 390 lines of Python. The code is
-[on GitHub](https://github.com/oceanforge/inference-shootout), MIT, fork
-it and point it at your own key.
+Then I ran it, and three things happened that I didn't plan for.
 
-This is what happened when I actually ran it.
+## The integration is two lines, and that's the least interesting part
 
-## The integration is two lines and I want to be upfront that that's the boring part
-
-DigitalOcean's inference endpoint is OpenAI-compatible, so:
+DigitalOcean's inference endpoint speaks OpenAI, so this is the whole
+thing:
 
 ```python
 client = OpenAI(
@@ -31,49 +32,51 @@ client = OpenAI(
 )
 ```
 
-That's the whole provider-specific surface area. No SDK, no adapter layer,
-no per-provider request shaping. Every model in this post — Llama,
-DeepSeek, Mistral, Qwen, OpenAI's open-weight `gpt-oss` line — goes
-through that one client with nothing but the model string changing.
+Every model below goes through that one client. Llama, DeepSeek, Mistral,
+Qwen, OpenAI's open-weight `gpt-oss` line. Only the model string changes.
 
-Which is genuinely the pitch, and it's also the least interesting thing I
-learned. The interesting things all came from running it.
+That is the pitch, and it's real, and I'll move past it quickly because
+you already knew an OpenAI-compatible endpoint would work like an OpenAI-
+compatible endpoint. What I didn't know is everything that follows.
 
-One thing worth flagging before you copy that snippet: the credential is a
-**model access key**, made under the Gradient AI Platform, not a
-DigitalOcean API token from Settings → API. They look similar and they are
-not the same object. (Though — see below — the enforcement is looser than
-the docs imply.)
+One footnote before you paste that snippet. The credential is a *model
+access key*, created under the Gradient AI Platform. It is not the API
+token from Settings, API. Different thing, different page. (Although, as I
+found out later, the endpoint doesn't care nearly as much about that
+distinction as the docs do.)
 
-## Racing them concurrently, without an event loop
+## Six streams, no event loop
 
-Six models, six concurrent streams, six columns filling at once. The
-obvious approach is one endpoint that fans out server-side and multiplexes
-the responses back. I didn't do that.
+I wanted the columns to fill simultaneously. Real racing, not six
+sequential progress bars pretending.
 
-Instead the browser opens **one `EventSource` per model**:
+The tidy way to do that is one endpoint that fans out server side and
+multiplexes everything back down a single connection. I didn't do the tidy
+way. The browser opens one `EventSource` per model instead:
 
 ```
 GET /stream?model=<id>&prompt=<text>
 ```
 
-Each connection runs its own completion and streams its own tokens. No
-merging, no shared buffer, no async orchestration. Flask stays
-synchronous. The whole streaming path is about 40 lines.
+Six models, six connections, six independent lifetimes. Nothing merges
+anything. Flask stays synchronous, no async, no orchestration layer, and
+the entire streaming path is about forty lines.
 
-The payoff is failure isolation, and I'll show you in a minute why that
-turned out to matter far more than I expected.
+I did it that way because it's simpler, and I stand by that. But the
+reason I'm glad I did it turned out to be different from the reason I
+chose it, which I'll get to.
 
-## Where I lost an hour
+## I predicted the wrong bug
 
-Six concurrent SSE connections against gunicorn's default sync worker do
-not work. I knew that going in — a sync worker holds one connection per
-worker, and streaming connections are held open for their entire life.
+Here's the part where I lost an hour.
 
-What I got wrong was the symptom.
+I knew gunicorn's default sync worker would be a problem. It handles one
+connection per worker process and holds it until the response is done.
+Fine for requests that last 40 milliseconds. Streaming responses stay open
+for seconds, so six concurrent streams need six workers or they queue.
 
-I predicted a hang. What actually happens is worse, because nothing looks
-broken. First-token times across six concurrent streams, one worker:
+I predicted the page would hang. It doesn't hang. Here's what six
+concurrent streams actually look like against one sync worker:
 
 | model | first token |
 | --- | --- |
@@ -83,72 +86,80 @@ broken. First-token times across six concurrent streams, one worker:
 | deepseek-3.2 | 8347 ms |
 | llama-4-maverick | 9147 ms |
 
-Look at the stagger. Each stream's first token arrives roughly when the
-previous one finished. That's serialization. Every request succeeded, no
-timeouts, no errors, correct responses throughout — just one at a time,
-10.7 seconds wall clock.
+Look at the spacing. Each stream's first token shows up right about when
+the previous stream finished. That's not slow models, that's a queue. Six
+requests, one at a time, 10.7 seconds to get through all of them.
 
-Same load with threaded workers:
+Switch to threaded workers:
 
 ```
 web: gunicorn --worker-class gthread --threads 16 --timeout 120 'app:create_app()'
 ```
 
-Four of the six first tokens now land inside a 1.4-second window instead
-of marching across a ten-second one. Wall clock 6.4 s.
+Now four of the six first tokens land inside a 1.4 second window instead
+of marching across a ten second one, and the whole thing takes 6.4
+seconds.
 
-The reason I'm writing this down: if you shipped the sync-worker version,
-you would not file a bug. Your page works. The columns fill in one after
-another and you conclude the models are slow. An outright stall would have
-been *easier* to catch, because a stall makes you look at your server.
+But go back and look at that first table again, because the interesting
+part isn't the fix. Every one of those requests succeeded. Correct
+responses, no timeouts, no errors, nothing in the logs. If I'd shipped the
+broken version I would not have filed a bug against myself, I'd have
+watched the columns fill in one after another, concluded the models were
+slow, and gone off to write a caching layer for a problem that was sitting
+in my Procfile the entire time. A hang would have been kinder. A hang
+makes you look at your server.
 
 ## The catalog will lie to you
 
-The app builds its model picker from `GET /v1/models`, because hardcoding
-a model list is how you end up shipping a dead one.
+The model picker is built from `GET /v1/models`, because hardcoding a
+model list is how you end up shipping a dead one.
 
-That call returns **72 models**. My account can call **six**.
+That call returns 72 models. My account can call six.
 
-Every Anthropic model, plus GPT-4o and o3, returns:
+Everything from Anthropic, plus GPT-4o and o3, comes back with:
 
 ```
 403 - {'error': {'message': 'this model is not available for your
 subscription tier', 'type': 'forbidden_error'}}
 ```
 
-And nothing in the `/v1/models` payload distinguishes them. No `available`
-flag, no tier field, nothing. The only way to find out a model is
-off-limits is to call it and read the 403.
+There is nothing in the `/v1/models` response that tells you which is
+which. No availability flag, no tier field, no hint. You find out by
+calling it and reading the 403.
 
-This bit me in the most embarrassing way possible: my own default model
-list shipped with `anthropic-claude-haiku-4.5` in it, because it's in the
-published catalog and on the pricing page. First real run, that column
-went red.
+Which is how I shipped a broken default. My preselected list had
+`anthropic-claude-haiku-4.5` sitting right there in it, because it's in
+the published catalog and it's on the pricing page with a real per-token
+rate beside it, and at no point between reading those two documents and
+writing that list did anything suggest I ought to check whether my own
+account could call the thing. First real run, that column went red in
+front of me.
 
-It also accidentally justified the architecture. Because each column is
-its own connection, the dead model showed its own 403 and the other five
-kept streaming. I built that isolation for hypothetical failures. The
-first real one arrived within a minute of first contact.
+Now, remember those six independent connections. The dead model threw its
+403, showed the error in its own column, and the other five kept streaming
+like nothing happened. I built that isolation for hypothetical failures.
+The first real failure arrived about sixty seconds after first contact
+with the API.
 
-If you build a model picker from that endpoint — and DigitalOcean's docs
-point you straight at it — assume most of what it returns is unreachable.
+If you're building anything that populates a menu from that endpoint, and
+DigitalOcean's docs point you right at it, assume most of what comes back
+is unreachable.
 
-## A DigitalOcean API token works on the inference endpoint
+## Small thing about credentials
 
-Small thing, but it cost me a confused minute. The docs are firm that a
-model access key and an API token are different credentials. They are. But
-a `dop_v1_...` API token authenticates fine against
-`inference.do-ai.run` — I tested it against both that and
-`api.digitalocean.com/v2/account`, and it works on both.
+The docs are firm that a model access key and an API token are different
+credentials. They are. But a `dop_v1_...` API token authenticates fine
+against `inference.do-ai.run`. I checked it against that and against
+`api.digitalocean.com/v2/account` and it works on both.
 
-Use the narrow one anyway. A leaked model access key costs you inference
-spend. A leaked API token costs you the account.
+Use the narrow one anyway. A leaked model access key costs you some
+inference spend. A leaked API token costs you the account.
 
-## The numbers
+## What the numbers said
 
-Three prompt shapes — short factual, long explanation, code generation —
-across six models, three runs each. 54 calls, `max_tokens=512`, `nyc`
-region, one evening in August, run from a laptop in Europe.
+Three prompt shapes (short factual, long explanation, code generation),
+six models, three runs each. 54 calls, `max_tokens=512`, `nyc` region, run
+from a laptop in Europe at about ten at night.
 
 Medians across all nine runs per model:
 
@@ -161,36 +172,37 @@ Medians across all nine runs per model:
 | openai-gpt-oss-120b | 4797 ms | 16.7 s | $0.000367 | 0/9 |
 | qwen3.5-397b-a17b | 9332 ms | 32.0 s | $0.000995 | **7/9** |
 
-Three things.
+Mistral 14B won on every axis I measured. Fastest to first token, fastest
+overall, cheapest per run, and it answered every single time. There's no
+trade-off curve to position yourself on here. For this workload the
+expensive models bought me nothing at all, which is not the result I
+expected and not the result I'd have guessed if you'd asked me on Friday.
 
-**The cheapest model was also the fastest.** Mistral 14B: quickest to
-first token, quickest overall, cheapest per run, and it answered every
-time. There's no trade-off curve here to sit on. On this workload the
-expensive options bought nothing.
+Time to first token ranged from 533 ms to 9.3 seconds. That's a 17x
+spread. If a model is going behind anything a person waits on, that gap
+decides whether the feature works, and there's no way to guess it from a
+model card.
 
-**Time to first token spread 17x**, from 533 ms to 9.3 seconds. If you're
-putting a model behind anything interactive, that difference is the
-difference between usable and not, and you cannot guess it.
+Then there's the last column.
 
-**And then look at the last column.**
+## Nothing failed. Nine runs came back empty.
 
-## Zero errors, and nine runs that returned nothing
+All 54 calls succeeded. No exceptions, no non-200s, no timeouts. Run this
+through any monitoring you like and it's a clean sheet.
 
-All 54 calls succeeded. No exceptions, no non-200s, no timeouts. A
-benchmark measuring latency and error rate would report a flawless run.
+Nine of those calls returned no readable text at all. Full price.
 
-Nine of those calls returned no readable text whatsoever, and billed in
-full.
+`qwen3.5-397b-a17b` did it seven times out of nine. It was also the most
+expensive model in the race, roughly 9x Mistral, and the slowest at 32
+seconds. Thirty-two seconds, top of the bill, empty box.
 
-`qwen3.5-397b-a17b` did it seven times out of nine. It was also, by some
-distance, the most expensive model in the race — roughly 9x Mistral — and
-the slowest at 32 seconds. Thirty-two seconds, top of the bill, empty box.
-
-It's a reasoning model. It spent 487 of its 512 token budget thinking, ran
-out before writing a single word of answer, and streamed its reasoning in
-`delta.reasoning_content` — a field that isn't in the OpenAI schema, so a
-client reading `delta.content` (which is every OpenAI-compatible client,
-including mine) sees precisely nothing.
+It's a reasoning model. What happened is it spent 487 of its 512 token
+budget thinking, ran out of room before writing a single word of the
+actual answer, and streamed all that thinking into a field called
+`delta.reasoning_content`, which is not part of the OpenAI schema and is
+therefore invisible to every OpenAI-compatible client on earth, mine
+included. So the request succeeds. The tokens get billed. The box stays
+empty.
 
 ```
 completion_tokens: 512
@@ -198,55 +210,63 @@ reasoning_tokens:  487
 content:           0 characters
 ```
 
-You can pay full freight for silence, and your monitoring will call it a
+You can pay full price for silence and have your dashboards call it a
 success.
 
-I patched the app to say so — a column with no content but non-zero
-`reasoning_tokens` now explains itself instead of sitting there looking
-broken. But the general lesson is bigger than my app: **if your evaluation
-only looks at latency and status codes, it cannot see this failure.** You
-have to look at the output. Which, it turns out, is the argument for
-building a tool that puts the output next to the numbers in the first
-place.
+I patched the app so a column with no content but non-zero
+`reasoning_tokens` explains itself instead of just sitting there looking
+broken. Raise `max_tokens` and Qwen does answer. Fine. But the general
+version of this is worse than my particular bug: if your evaluation
+watches latency and status codes, it is structurally incapable of seeing
+this failure. You have to look at what came back.
 
-## What the whole thing cost
+Which is, awkwardly for me, the entire argument for building a tool that
+puts the output next to the numbers. I did not set out to prove my own
+premise. It just kept happening.
 
-**$0.0185.** Eighteen tenths of a cent, for all 54 calls.
+## The bill
+
+$0.0185. For all 54 calls.
 
 I spent longer reading the pricing page than the experiment cost to run.
-That's the actual takeaway about picking models by measurement instead of
-by reputation: at these prices, the reason nobody does it isn't cost.
-It's that nobody's built the thing. So I built the thing.
+That reframed the whole exercise for me. The reason nobody measures this
+stuff before picking a model isn't cost, and it isn't really time either.
+It's that there's nothing sitting there ready to run. So now there is one.
 
-## Would I use it
+## Would I use it again
 
-For picking a model for a specific job, yes — that's exactly what it's
-for, and I now have opinions about Mistral 14B I didn't have on Friday.
+For picking a model for a specific job, yes. I have opinions about Mistral
+14B now that I didn't have last week, and they came from data instead of
+from a thread I skimmed.
 
-The friction was real but small: a catalog that advertises models you
-can't call, a credential distinction the docs enforce less strictly than
-they describe, and a worker-config trap that any streaming app on any
-provider would hit. None of that is specific to DigitalOcean except the
-first, and the first is the one I'd most like to see fixed — an
-`available` flag on `/v1/models` would take an afternoon and save everyone
-that 403.
+The friction was real but small. A catalog that advertises models you
+can't call. A credential distinction that's enforced less strictly than
+it's described. A worker config trap that would bite any streaming app on
+any platform. Only the first of those is really DigitalOcean's, and it's
+the one I'd most like fixed. An `available` field on `/v1/models` is an
+afternoon of work and it would save everybody that 403.
 
-What I'd genuinely recommend is the one-key-one-URL part. Not because
-it's clever, but because "compare four providers" normally means four
-SDKs, four keys, four dashboards and four invoices, and here it meant
-changing a string in a list.
+What I'd recommend is the boring part I skipped past at the top. Comparing
+four providers normally means four SDKs with four different streaming
+conventions, four keys in four places, four dashboards and four invoices
+at the end of the month, and by the time that plumbing works you have
+spent more effort on it than on the question you started with. Here it
+meant editing a list of strings.
 
-**Caveats, stated plainly:** n=3, one region, one evening, one account
-tier, one set of prompts. This is not a benchmark. It's one developer's
-Tuesday. The point was never to publish authoritative numbers — it was to
-make it cheap enough for you to get your own, on your prompts.
+Caveats, plainly: n=3, one region, one evening, one account tier, one set
+of prompts, and a laptop in Europe hitting a New York datacenter. This is
+not a benchmark. It's one developer's Tuesday night. The point was never
+to hand you authoritative numbers, it was to make it cheap enough that you
+go and get your own, on your prompts, on your account.
 
 ---
 
-Code: **[github.com/oceanforge/inference-shootout](https://github.com/oceanforge/inference-shootout)**
-· `NOTES.md` has the raw build log including the bits that went wrong,
-and `docs/measurements.json` has all 54 runs.
+Code: **[github.com/oceanforge/inference-
+shootout](https://github.com/oceanforge/inference-shootout)**. `NOTES.md`
+has the raw build log, including the parts that went wrong in real time,
+and `docs/measurements.json` has all 54 runs if you want to argue with
+them.
 
-Part of [oceanforge](https://github.com/oceanforge) — small
-deploy-it-yourself apps for the DigitalOcean cloud. Not affiliated with
-DigitalOcean; just a fan of shipping small things on it.
+Part of [oceanforge](https://github.com/oceanforge), small deploy-it-
+yourself apps for the DigitalOcean cloud. Not affiliated with
+DigitalOcean, just a fan of shipping small things on it.
