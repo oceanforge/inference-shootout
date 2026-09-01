@@ -179,8 +179,8 @@ Medians across all nine runs per model:
 Mistral 14B won on every axis I measured. Fastest to first token, fastest
 overall, cheapest per run, and it answered every single time. There's no
 trade-off curve to position yourself on here. For this workload the
-expensive models bought me nothing at all, which is not the result I
-expected and not the result I'd have guessed if you'd asked me on Friday.
+expensive models bought me nothing at all, which is not the result I expected and not the result I'd have guessed the
+day before I ran it.
 
 Time to first token ranged from 533 ms to 9.3 seconds. That's a 17x
 spread. If a model is going behind anything a person waits on, that gap
@@ -258,8 +258,7 @@ spent more effort on it than on the question you started with. Here it
 meant editing a list of strings.
 
 Caveats, plainly: n=3, one region, one evening, one account tier, one set
-of prompts, and a laptop in Europe hitting a New York datacenter. This is
-not a benchmark. It's one developer's Tuesday night. The point was never
+of prompts, and a laptop in Europe hitting a New York datacenter. This is not a benchmark. It's one developer's Wednesday night. The point was never
 to hand you authoritative numbers, it was to make it cheap enough that you
 go and get your own, on your prompts, on your account.
 
