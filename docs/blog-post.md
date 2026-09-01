@@ -20,6 +20,8 @@ it.
 
 Then I ran it, and three things happened that I didn't plan for.
 
+![Six models streaming answers to one prompt side by side, filling at different speeds](https://raw.githubusercontent.com/oceanforge/inference-shootout/main/docs/race.gif)
+
 ## The integration is two lines, and that's the least interesting part
 
 DigitalOcean's inference endpoint speaks OpenAI, so this is the whole
@@ -160,6 +162,8 @@ inference spend. A leaked API token costs you the account.
 Three prompt shapes (short factual, long explanation, code generation),
 six models, three runs each. 54 calls, `max_tokens=512`, `nyc` region, run
 from a laptop in Europe at about ten at night.
+
+![The finished run: six columns of output above a table of TTFT, total time, tokens and cost](https://raw.githubusercontent.com/oceanforge/inference-shootout/main/docs/screenshot.png)
 
 Medians across all nine runs per model:
 
