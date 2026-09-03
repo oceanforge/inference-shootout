@@ -143,9 +143,9 @@ table#results td {
   .column pre { height: 200px; }
 }
 
-/* A reasoning model that used its whole budget thinking and produced no answer.
-   Visually distinct from a failure — it worked, it just said nothing. */
-.column.reasoned-out pre {
+/* The model ran and billed but returned no readable text. Visually distinct
+   from an error: it worked, it just said nothing. */
+.column.no-output pre {
   font-style: italic;
   opacity: 0.75;
 }

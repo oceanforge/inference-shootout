@@ -106,3 +106,36 @@ def test_reasoning_tokens_is_none_for_ordinary_models():
     client = FakeClient(stream_factory=lambda **kw: FakeStream(["hi"], usage))
     done = list(stream_completion(client, "m", "hi", 512, clock=FakeClock()))[-1]
     assert done["data"]["reasoning_tokens"] is None
+
+
+def test_silent_billed_response_is_detectable_without_a_reasoning_count():
+    """The case Vinh Nguyen raised in the dev.to comments: a provider that bills
+    completion tokens but reports no reasoning_tokens (different field, nested
+    elsewhere, or plain truncation) produced the original empty column with
+    nothing to explain it, because the old check keyed on reasoning_tokens.
+
+    content_chars must expose the failure on its own; reasoning_tokens only
+    labels the cause when the provider happens to report one."""
+    usage = types.SimpleNamespace(prompt_tokens=25, completion_tokens=512)  # no details
+    client = FakeClient(stream_factory=lambda **kw: FakeStream([], usage))
+    done = list(stream_completion(client, "m", "hi", 512, clock=FakeClock()))[-1]
+    assert done["data"]["content_chars"] == 0     # detects the failure
+    assert done["data"]["output_tokens"] == 512   # and it was billed in full
+    assert done["data"]["reasoning_tokens"] is None  # with no cause available
+
+
+def test_content_chars_counts_streamed_text():
+    usage = types.SimpleNamespace(prompt_tokens=1, completion_tokens=2)
+    client = FakeClient(stream_factory=lambda **kw: FakeStream(["Hel", "lo"], usage))
+    done = list(stream_completion(client, "m", "hi", 512, clock=FakeClock()))[-1]
+    assert done["data"]["content_chars"] == 5
+
+
+def test_content_chars_is_zero_when_a_reasoning_model_never_answers():
+    details = types.SimpleNamespace(reasoning_tokens=487)
+    usage = types.SimpleNamespace(prompt_tokens=25, completion_tokens=512,
+                                  completion_tokens_details=details)
+    client = FakeClient(stream_factory=lambda **kw: FakeStream([], usage))
+    done = list(stream_completion(client, "m", "hi", 512, clock=FakeClock()))[-1]
+    assert done["data"]["content_chars"] == 0
+    assert done["data"]["reasoning_tokens"] == 487

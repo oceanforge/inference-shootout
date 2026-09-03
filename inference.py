@@ -52,6 +52,7 @@ def stream_completion(client, model, prompt, max_tokens, clock=time.monotonic):
     started = clock()
     ttft_ms = None
     usage = None
+    content_chars = 0
     try:
         stream = client.chat.completions.create(
             model=model,
@@ -69,6 +70,7 @@ def stream_completion(client, model, prompt, max_tokens, clock=time.monotonic):
                     continue
                 if ttft_ms is None:
                     ttft_ms = round((clock() - started) * 1000)
+                content_chars += len(text)
                 yield {"event": "token", "data": {"text": text}}
     except Exception as exc:  # noqa: BLE001 - surfaced to the reader, not swallowed
         yield {"event": "error", "data": {"message": str(exc)}}
@@ -81,20 +83,26 @@ def stream_completion(client, model, prompt, max_tokens, clock=time.monotonic):
             "total_ms": round((clock() - started) * 1000),
             "input_tokens": getattr(usage, "prompt_tokens", None),
             "output_tokens": getattr(usage, "completion_tokens", None),
+            "content_chars": content_chars,
             "reasoning_tokens": _reasoning_tokens(usage),
         },
     }
 
 
 def _reasoning_tokens(usage):
-    """Tokens a reasoning model spent thinking rather than answering.
+    """Tokens a reasoning model spent thinking rather than answering, if reported.
 
     Reasoning models stream their thinking in `delta.reasoning_content`, which
-    is not part of the OpenAI schema, so a client reading `delta.content` sees
-    nothing at all. With a low max_tokens the model can spend its entire budget
-    reasoning and return zero visible output while still billing in full. The
-    count is surfaced so an empty column can explain itself instead of just
-    looking broken.
+    is outside the OpenAI schema, so a client reading `delta.content` sees
+    nothing while the model bills in full.
+
+    This only ever LABELS that failure. It must not be what detects it: a
+    provider that bills the reasoning without reporting a count, or reports it
+    under another name, would produce the same silent column and this would
+    return None. Detection belongs on `content_chars` against `output_tokens`,
+    which holds whatever the cause turns out to be. Credit to Vinh Nguyen for
+    pointing out that the original check inherited the shape of the bug it
+    was meant to explain.
     """
     details = getattr(usage, "completion_tokens_details", None)
     return getattr(details, "reasoning_tokens", None) if details else None

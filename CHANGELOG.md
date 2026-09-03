@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-03
+
+### Fixed
+
+- Silent billed responses were only detected when the provider reported
+  `reasoning_tokens`, which is the same dependency that hid the failure in
+  the first place. A provider that bills completion tokens without reporting
+  a reasoning count left the same unexplained empty column. Detection now
+  keys on `content_chars` against `output_tokens`, which holds whatever the
+  cause turns out to be; `reasoning_tokens` only labels the cause when it is
+  reported. Reported by Vinh Nguyen in the dev.to comments.
+
+### Added
+
+- `content_chars` in the `done` event, so "billed but returned nothing" is
+  observable server-side and testable rather than inferred from the DOM.
+
 ## [0.2.0] - 2026-08-26
 
 First run against the live endpoint. Everything here came from things that
