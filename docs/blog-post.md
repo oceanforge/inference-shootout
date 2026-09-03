@@ -228,6 +228,16 @@ Which is, awkwardly for me, the entire argument for building a tool that
 puts the output next to the numbers. I did not set out to prove my own
 premise. It just kept happening.
 
+**Update, 3 September.** Vinh Nguyen pointed out in the comments that my
+fix had the same shape as the bug. It only fired when the provider both
+billed the reasoning and reported the count in the one field I happened to
+read, so a provider that bills silently without reporting a reasoning
+count leaves the same unexplained empty column. The check now keys on
+content characters against billed completion tokens, which catches the
+failure whatever caused it, and the reasoning count is only used to name
+the cause. Fixed in the repo, with a regression test for exactly that
+case.
+
 ## The bill
 
 $0.0185. For all 54 calls.
